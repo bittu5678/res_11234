@@ -1,0 +1,22 @@
+{
+  "lastTxNumber": 6,
+  "transactions": [
+    {
+      "txNumber": 6,
+      "paymentId": "pay_t34_api_1793412601893_k2fw",
+      "orderId": "ord_t34_api_1793412601893",
+      "videoId": "vid_1793412601893",
+      "userId": "FT483921",
+      "userName": "Alex Rivera",
+      "referrerId": null,
+      "amount": 6,
+      "transactionType": "premium_upload",
+      "isSpecial": false,
+      "specialTag": "NORMAL_PREMIUM",
+      "referralCommission": 0,
+      "adminAllocation": 2,
+      "globalPoolAllocation": 3,
+      "createdAt": "2026-10-31T02:10:01.893Z"
+    }
+  ]
+}

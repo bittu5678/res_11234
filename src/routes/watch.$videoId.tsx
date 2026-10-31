@@ -1,0 +1,436 @@
+import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
+import {
+  Play,
+  ThumbsUp,
+  ThumbsDown,
+  Share2,
+  Download,
+  Bookmark,
+  Volume2,
+  Maximize2,
+  Settings,
+  Send,
+  ArrowLeft,
+} from "lucide-react";
+import { toast } from "sonner";
+
+import { Navbar } from "@/components/videohub/Navbar";
+import { BottomNav } from "@/components/videohub/BottomNav";
+import { VideoCard } from "@/components/videohub/VideoCard";
+import { ImageCard } from "@/components/videohub/ImageCard";
+import { FaceTubeVideoPlayer } from "@/components/videohub/FaceTubeVideoPlayer";
+import { allVideos, findVideo, findVideoAsync, type Video } from "@/data/videos";
+import { useAuth } from "@/lib/auth-context";
+import {
+  fetchUploadedVideos,
+  convertUploadedToCatalogVideo,
+  getVideoBadgeLabels,
+  type UploadedVideo,
+} from "@/lib/video-service";
+import {
+  fetchUploadedImages,
+  interleaveFeedWithImages,
+  IMAGE_FEED_INTERVAL,
+  type UploadedImage,
+} from "@/lib/image-service";
+
+export const Route = createFileRoute("/watch/$videoId")({
+  loader: async ({ params }) => {
+    const video = await findVideoAsync(params.videoId);
+    if (!video) throw notFound();
+    return { video };
+  },
+  head: ({ loaderData }) => {
+    if (!loaderData) {
+      return {
+        meta: [{ title: "Video unavailable — FaceTube" }, { name: "robots", content: "noindex" }],
+      };
+    }
+    const { video } = loaderData;
+    const title = `${video.title} — FaceTube`;
+    return {
+      meta: [
+        { title },
+        { name: "description", content: video.description },
+        { property: "og:title", content: title },
+        { property: "og:description", content: video.description },
+        { property: "og:type", content: "video.other" },
+        { name: "twitter:card", content: "summary_large_image" },
+      ],
+    };
+  },
+  notFoundComponent: WatchNotFound,
+  component: WatchPage,
+});
+
+function WatchNotFound() {
+  return (
+    <div className="grid min-h-screen place-items-center bg-background px-6 text-center font-sans">
+      <div>
+        <h1 className="text-2xl font-extrabold text-foreground">This video isn’t available</h1>
+        <p className="mt-2 text-muted-foreground">It may have been removed or made private.</p>
+        <Link
+          to="/"
+          className="mt-6 inline-block rounded-full bg-brand px-5 py-2.5 text-sm font-semibold text-brand-foreground"
+        >
+          Back to home
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function WatchPage() {
+  const navigate = useNavigate();
+  const { video } = Route.useLoaderData();
+  const { user, profile } = useAuth();
+  const [subscribed, setSubscribed] = useState(false);
+  const [liked, setLiked] = useState(false);
+  const [disliked, setDisliked] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [commentText, setCommentText] = useState("");
+  const [comments, setComments] = useState([
+    {
+      id: "c1",
+      n: "Aria Kapoor",
+      i: "AK",
+      t: "The pacing on this is perfect. Bookmarked the whole middle section.",
+      time: "2 days ago",
+    },
+    {
+      id: "c2",
+      n: "Marcus Bell",
+      i: "MB",
+      t: "Been waiting for this one. The part at 08:12 finally made it click for me.",
+      time: "2 days ago",
+    },
+  ]);
+
+  const [uploadedVideos, setUploadedVideos] = useState<UploadedVideo[]>([]);
+  const [uploadedImages, setUploadedImages] = useState<UploadedImage[]>([]);
+
+  useEffect(() => {
+    fetchUploadedVideos()
+      .then((vids) => {
+        if (vids && vids.length > 0) setUploadedVideos(vids);
+      })
+      .catch((err) => console.error("Error loading videos for related feed:", err));
+
+    fetchUploadedImages()
+      .then((imgs) => {
+        if (imgs && imgs.length > 0) setUploadedImages(imgs);
+      })
+      .catch((err) => console.error("Error loading images for related feed:", err));
+  }, []);
+
+  const allAvailableVideos: Video[] = [
+    ...uploadedVideos.map(convertUploadedToCatalogVideo),
+    ...allVideos,
+  ];
+  const seenRelatedIds = new Set<string>([video.id]);
+  const related = allAvailableVideos
+    .filter((v) => {
+      if (seenRelatedIds.has(v.id)) return false;
+      seenRelatedIds.add(v.id);
+      return true;
+    })
+    .slice(0, 10);
+
+  const interleavedRelated = interleaveFeedWithImages(related, uploadedImages, IMAGE_FEED_INTERVAL);
+
+  const handleToggleLike = () => {
+    setLiked((v) => !v);
+    if (!liked && disliked) setDisliked(false);
+  };
+
+  const handleToggleDislike = () => {
+    setDisliked((v) => !v);
+    if (!disliked && liked) setLiked(false);
+  };
+
+  const handleShare = () => {
+    if (navigator.share) {
+      navigator.share({ title: video.title, url: window.location.href }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(window.location.href);
+      toast.success("Link copied to clipboard!");
+    }
+  };
+
+  const handleToggleSave = () => {
+    setSaved((prev) => {
+      const next = !prev;
+      toast.success(next ? "Added to Watch Later!" : "Removed from Watch Later.");
+      return next;
+    });
+  };
+
+  const handleAddComment = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!commentText.trim()) return;
+
+    const authorName = profile?.full_name || user?.email?.split("@")[0] || "You";
+    const authorInitials = authorName.slice(0, 2).toUpperCase();
+
+    setComments((prev) => [
+      {
+        id: `c-${Date.now()}`,
+        n: authorName,
+        i: authorInitials,
+        t: commentText.trim(),
+        time: "Just now",
+      },
+      ...prev,
+    ]);
+    setCommentText("");
+    toast.success("Comment posted!");
+  };
+
+  return (
+    <div className="min-h-screen bg-background font-sans text-foreground">
+      <Navbar onToggleSidebar={() => {}} />
+
+      <main className="mx-auto grid max-w-[1600px] gap-8 px-4 py-6 pb-24 sm:px-6 lg:grid-cols-[minmax(0,1fr)_400px] lg:pb-10">
+        <div className="min-w-0">
+          {/* Visible Back button for mobile and desktop navigation */}
+          <div className="mb-3.5 flex items-center">
+            <button
+              type="button"
+              onClick={() => {
+                if (window.history.length > 1) {
+                  window.history.back();
+                } else {
+                  navigate({ to: "/" });
+                }
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary/80 px-3.5 py-1.5 text-xs font-semibold text-foreground transition hover:bg-secondary active:scale-95 shadow-xs"
+              aria-label="Back"
+            >
+              <ArrowLeft className="h-3.5 w-3.5" />
+              <span>Back</span>
+            </button>
+          </div>
+
+          <div className="overflow-hidden rounded-2xl bg-black shadow-lift">
+            <FaceTubeVideoPlayer
+              src={video.videoUrl}
+              poster={video.thumb || video.thumbnailUrl}
+              title={video.title}
+              duration={video.duration}
+              autoPlay={true}
+            />
+          </div>
+
+          <h1 className="mt-4 text-xl font-extrabold leading-snug tracking-tight sm:text-2xl">
+            {video.title}
+          </h1>
+
+          {/* YouTube-style small Sponsor & Ads labels immediately below video title */}
+          {(() => {
+            const watchLabels = getVideoBadgeLabels(video);
+            if (!watchLabels.showSponsorLabel && !watchLabels.showAdsLabel) return null;
+            return (
+              <div className="mt-2 flex items-center gap-2">
+                {watchLabels.showSponsorLabel && (
+                  <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold tracking-wide bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
+                    Sponsor
+                  </span>
+                )}
+                {watchLabels.showAdsLabel && (
+                  <span className="inline-flex items-center rounded px-2 py-0.5 text-xs font-bold tracking-wide bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30">
+                    Ads
+                  </span>
+                )}
+              </div>
+            );
+          })()}
+
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <span
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-sm font-bold text-white"
+              style={{ backgroundColor: video.tint }}
+            >
+              {video.initials}
+            </span>
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold">{video.channel}</p>
+              <p className="truncate text-xs text-muted-foreground">1.2M subscribers</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setSubscribed((v) => {
+                  const next = !v;
+                  toast.success(next ? `Subscribed to ${video.channel}!` : `Unsubscribed.`);
+                  return next;
+                });
+              }}
+              className={`ml-1 rounded-full px-5 py-2 text-sm font-semibold transition ${
+                subscribed
+                  ? "bg-secondary text-foreground hover:bg-muted"
+                  : "bg-brand text-brand-foreground shadow-lift hover:bg-brand-dark"
+              }`}
+            >
+              {subscribed ? "Subscribed" : "Subscribe"}
+            </button>
+
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <div className="flex items-center overflow-hidden rounded-full bg-secondary">
+                <button
+                  type="button"
+                  onClick={handleToggleLike}
+                  className={`flex items-center gap-2 px-4 py-2 text-sm font-medium transition hover:bg-muted ${
+                    liked ? "text-brand font-bold" : "text-foreground"
+                  }`}
+                >
+                  <ThumbsUp className={`h-4 w-4 ${liked ? "fill-brand" : ""}`} />
+                  {liked ? "24K" : "23K"}
+                </button>
+                <span className="h-6 w-px bg-border" />
+                <button
+                  type="button"
+                  aria-label="Dislike"
+                  onClick={handleToggleDislike}
+                  className={`px-4 py-2 transition hover:bg-muted ${
+                    disliked ? "text-foreground font-bold" : "text-foreground"
+                  }`}
+                >
+                  <ThumbsDown className={`h-4 w-4 ${disliked ? "fill-foreground" : ""}`} />
+                </button>
+              </div>
+
+              {/* Share */}
+              <button
+                type="button"
+                onClick={handleShare}
+                className="flex items-center gap-2 rounded-full bg-secondary px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted active:scale-95"
+              >
+                <Share2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Share</span>
+              </button>
+
+              {/* Download */}
+              <button
+                type="button"
+                onClick={() => toast.info("Download starting...")}
+                className="flex items-center gap-2 rounded-full bg-secondary px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted active:scale-95"
+              >
+                <Download className="h-4 w-4" />
+                <span className="hidden sm:inline">Download</span>
+              </button>
+
+              {/* Save / Watch Later */}
+              <button
+                type="button"
+                onClick={handleToggleSave}
+                className={`flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium transition active:scale-95 ${
+                  saved ? "bg-brand text-white" : "bg-secondary text-foreground hover:bg-muted"
+                }`}
+              >
+                <Bookmark className={`h-4 w-4 ${saved ? "fill-white" : ""}`} />
+                <span className="hidden sm:inline">{saved ? "Saved" : "Save"}</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 rounded-2xl bg-secondary/70 p-4">
+            <p className="text-sm font-semibold">
+              {video.views} · {video.age} ·{" "}
+              <span className="text-brand">#{video.category || "General"}</span>
+            </p>
+            <p
+              className={`mt-2 text-sm leading-relaxed text-foreground/85 ${
+                expanded ? "" : "line-clamp-2"
+              }`}
+            >
+              {video.description} Chapters, resources and the full project source are linked below.
+              Thanks for watching — leave a comment with what you want covered next on{" "}
+              {video.channel}.
+            </p>
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-2 text-sm font-semibold text-muted-foreground hover:text-foreground"
+            >
+              {expanded ? "Show less" : "Show more"}
+            </button>
+          </div>
+
+          {/* Interactive Comments Section */}
+          <section className="mt-8 space-y-6">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-bold">{comments.length + 1282} Comments</h2>
+            </div>
+
+            {/* Add Comment Input Form */}
+            <form onSubmit={handleAddComment} className="flex items-start gap-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-brand-dark text-xs font-bold text-white shadow-sm">
+                {(profile?.username || user?.email || "U").charAt(0).toUpperCase()}
+              </span>
+              <div className="flex-1 space-y-2">
+                <input
+                  type="text"
+                  placeholder="Add a comment..."
+                  value={commentText}
+                  onChange={(e) => setCommentText(e.target.value)}
+                  className="w-full border-b border-border bg-transparent pb-1.5 text-sm text-foreground outline-none transition focus:border-brand"
+                />
+                {commentText.trim() && (
+                  <div className="flex justify-end gap-2 animate-in fade-in">
+                    <button
+                      type="button"
+                      onClick={() => setCommentText("")}
+                      className="rounded-full px-3 py-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="inline-flex items-center gap-1.5 rounded-full bg-brand px-4 py-1.5 text-xs font-bold text-white shadow-sm transition hover:bg-brand-dark"
+                    >
+                      <Send className="h-3 w-3" />
+                      Comment
+                    </button>
+                  </div>
+                )}
+              </div>
+            </form>
+
+            <div className="space-y-5">
+              {comments.map((c) => (
+                <div key={c.id} className="flex gap-3 animate-in fade-in">
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-gradient-to-br from-brand to-brand-dark text-xs font-bold text-brand-foreground">
+                    {c.i}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold">
+                      {c.n} <span className="font-normal text-muted-foreground">· {c.time}</span>
+                    </p>
+                    <p className="text-sm text-foreground/85 mt-0.5">{c.t}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+
+        <aside className="min-w-0">
+          <h2 className="mb-4 text-base font-bold">Related content</h2>
+          <div className="grid grid-cols-1 gap-x-5 gap-y-7 sm:grid-cols-2 lg:grid-cols-1">
+            {interleavedRelated.map((item) =>
+              item.type === "video" ? (
+                <VideoCard key={item.data.id} video={item.data} />
+              ) : (
+                <ImageCard key={item.data.id} image={item.data} />
+              ),
+            )}
+          </div>
+        </aside>
+      </main>
+
+      <BottomNav />
+    </div>
+  );
+}
